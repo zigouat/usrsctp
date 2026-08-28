@@ -6,7 +6,7 @@
     .dependencies = .{
         .usrsctp = .{
             .url = "git+https://github.com/sctplab/usrsctp.git#07f871bda23943c43c9e74cc54f25130459de830",
-            .hash = "N-V-__8AAH8JWAAnLo1IhGB_xM7Gds4eXGoF64rFChCefjNr",
+            .hash = "N-V-__8AAO_NVwBMWOcWx7MegHi1_BrVEvoFQDBBsh2P8lzq",
         },
     },
     .paths = .{
