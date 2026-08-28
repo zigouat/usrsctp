@@ -137,7 +137,14 @@ pub const SockaddrConn = if (sconn_has_len) extern struct {
     }
 };
 
-pub const SockstoreConn = c.union_sctp_sockstore;
+// sized to match union sctp_sockstore's largest member (sockaddr_in6, 28 bytes);
+// translate-C's demotes sctp_sockstore to opaque which breaks the receive callback.
+const sockaddr_in6_size = 28;
+
+pub const SockstoreConn = extern union {
+    sconn: SockaddrConn,
+    _pad: [sockaddr_in6_size]u8,
+};
 pub const Notification = c.sctp_notification;
 
 pub const RcvInfo = extern struct {
