@@ -1,0 +1,17 @@
+.{
+    .name = .usrsctp,
+    .version = "0.0.0",
+    .fingerprint = 0x5d55bf7087395d4,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .usrsctp = .{
+            .url = "git+https://github.com/sctplab/usrsctp.git?ref=v0.9.5.0",
+            .hash = "N-V-__8AAH8JWAAnLo1IhGB_xM7Gds4eXGoF64rFChCefjNr",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
