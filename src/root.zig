@@ -24,7 +24,7 @@ pub const Socket = opaque {
             config.receive_cb,
             null,
             0,
-            config.ctx.?,
+            config.ctx,
         ) orelse return error.CreateFailed;
 
         try socket.setNonBlocking(config.non_blocking);
@@ -145,7 +145,45 @@ pub const SockstoreConn = extern union {
     sconn: SockaddrConn,
     _pad: [sockaddr_in6_size]u8,
 };
-pub const Notification = c.sctp_notification;
+
+pub const Notification = extern union {
+    pub const Header = extern struct {
+        type: EventType,
+        flags: u16,
+        length: u32,
+    };
+
+    pub const AssocChange = extern struct {
+        pub const State = enum(u16) {
+            COMM_UP = 0x0001,
+            COMM_LOST = 0x0002,
+            RESTART = 0x0003,
+            SHUTDOWN_COMP = 0x0004,
+            CANT_STR_ASSOC = 0x0005,
+        };
+
+        type: EventType,
+        flags: u16,
+        length: u32,
+        state: State,
+        err: u16,
+        outbound_streams: u16,
+        inbound_streams: u16,
+        assoc_id: u32,
+        _sac_info: [0]u8,
+    };
+
+    pub const ShutdownEvent = extern struct {
+        type: EventType,
+        flags: u16,
+        length: u32,
+        assoc_id: u32,
+    };
+
+    header: Header,
+    assoc_change: AssocChange,
+    shutdown_event: ShutdownEvent,
+};
 
 pub const RcvInfo = extern struct {
     sid: u16 = 0,
