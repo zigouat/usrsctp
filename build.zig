@@ -62,25 +62,11 @@ pub fn build(b: *std.Build) void {
     usrsctp.installHeader(usrsctp_dep.path("usrsctplib/usrsctp.h"), "usrsctp.h");
     b.installArtifact(usrsctp);
 
-    const tc = b.addTranslateC(.{
-        .root_source_file = usrsctp_dep.path("usrsctplib/usrsctp.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const tc_mod = b.addModule("usrsctp", .{
-        .root_source_file = tc.getOutput(),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const mod = b.addModule("sctp", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "usrsctp", .module = tc_mod },
-        },
+        .imports = &.{},
     });
     mod.linkLibrary(usrsctp);
 }

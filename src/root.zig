@@ -3,6 +3,20 @@ pub const c = @import("usrsctp");
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const AF_CONN: u32 = 123;
+pub const SOCK_STREAM: u32 = 1;
+pub const IPPROTO_SCTP: u32 = 132;
+
+// Set socket options
+pub const SCTP_INITMSG: u32 = 0x0003;
+pub const SCTP_NODELAY: u32 = 0x0004;
+pub const SCTP_EVENT: u32 = 0x001E;
+
+pub const Error = struct {
+    pub const INPROGRESS: i32 = 115;
+    pub const IO: i32 = 5;
+};
+
 const InitSendFn = fn (addr: ?*anyopaque, buffer: ?*anyopaque, length: usize, tos: u8, set_df: u8) callconv(.c) c_int;
 const SocketRecvFn = fn (sock: ?*Socket, addr: SockstoreConn, data: ?*anyopaque, datalen: usize, rcvinfo: RcvInfo, flags: Flags, ulp_info: ?*anyopaque) callconv(.c) c_int;
 const SocketSendFn = fn (sock: ?*Socket, sb_free: u32, ulp_info: ?*anyopaque) callconv(.c) c_int;
@@ -15,12 +29,17 @@ pub const SocketConfig = struct {
     enable_stream_reset: bool = false,
 };
 
+pub const AssocValue = extern struct {
+    assoc_id: u32 = 0,
+    assoc_value: u32 = 0,
+};
+
 pub const Socket = opaque {
     pub fn create(config: SocketConfig) !*Socket {
         const socket = usrsctp_socket(
             AF_CONN,
-            c.SOCK_STREAM,
-            c.IPPROTO_SCTP,
+            SOCK_STREAM,
+            IPPROTO_SCTP,
             config.receive_cb,
             null,
             0,
@@ -30,15 +49,17 @@ pub const Socket = opaque {
         try socket.setNonBlocking(config.non_blocking);
         if (config.no_delay) {
             var on: i32 = 1;
-            try socket.setOption(c.SCTP_NODELAY, &on, @sizeOf(i32));
+            try socket.setOption(SCTP_NODELAY, &on, @sizeOf(i32));
         }
 
         if (config.enable_stream_reset) {
-            var reset: c.sctp_assoc_value = .{
-                .assoc_id = c.SCTP_FUTURE_ASSOC,
-                .assoc_value = c.SCTP_ENABLE_RESET_STREAM_REQ,
+            const ENABLE_STREAM_RESET: c_int = 0x00000900;
+
+            var reset = AssocValue{
+                .assoc_id = 0, // SCTP_FUTURE_ASSOC
+                .assoc_value = 1, // SCTP_ENABLE_RESET_STREAM_REQ,
             };
-            try socket.setOption(c.SCTP_ENABLE_STREAM_RESET, &reset, @sizeOf(c.sctp_assoc_value));
+            try socket.setOption(ENABLE_STREAM_RESET, &reset, @sizeOf(AssocValue));
         }
 
         return socket;
@@ -57,17 +78,17 @@ pub const Socket = opaque {
 
     pub fn connect(self: *Socket, addr: *SockaddrConn) !void {
         const ret = usrsctp_connect(self, addr, @sizeOf(SockaddrConn));
-        if (ret < 0 and std.c._errno().* != c.EINPROGRESS) {
+        if (ret < 0 and std.c._errno().* != Error.INPROGRESS) {
             return error.ConnectFailed;
         }
     }
 
     pub fn setInitMessage(self: *Socket, init_msg: *InitMsg) !void {
-        try self.setOption(c.SCTP_INITMSG, init_msg, @sizeOf(InitMsg));
+        try self.setOption(SCTP_INITMSG, init_msg, @sizeOf(InitMsg));
     }
 
     pub fn setOption(self: *Socket, option_name: c_int, option_value: *anyopaque, size: u32) !void {
-        if (usrsctp_setsockopt(self, c.IPPROTO_SCTP, option_name, option_value, size) != 0) {
+        if (usrsctp_setsockopt(self, IPPROTO_SCTP, option_name, option_value, size) != 0) {
             return error.SetOptionFailed;
         }
     }
@@ -75,13 +96,59 @@ pub const Socket = opaque {
     pub fn subscribe(self: *Socket, events: []const EventType) !void {
         for (events) |event| {
             var ev = Event{
-                .assoc_id = c.SCTP_ALL_ASSOC,
+                .assoc_id = 2, // SCTP_ALL_ASSOC,
                 .event_type = event,
                 .on = 1,
             };
 
-            try self.setOption(c.SCTP_EVENT, &ev, @sizeOf(c.sctp_event));
+            try self.setOption(SCTP_EVENT, &ev, @sizeOf(Event));
         }
+    }
+
+    pub const SendConfig = struct {
+        ppid: u32,
+        sid: u16,
+        ordered: bool = true,
+        max_retransmits: u32 = 0,
+        max_lifetime: u32 = 0,
+    };
+
+    pub fn send(self: *Socket, data: []const u8, config: SendConfig) error{SendFailed}!void {
+        const pr_info: PrInfo = if (config.max_retransmits != 0)
+            .{ .policy = .rtx, .value = config.max_retransmits }
+        else if (config.max_lifetime != 0)
+            .{ .policy = .ttl, .value = config.max_lifetime }
+        else
+            .{};
+
+        var sendv_spa = SendvSpa{
+            .flags = .{
+                .send_info = true,
+                .pr_info = config.max_retransmits != 0 or config.max_lifetime != 0,
+            },
+            .send_info = SendInfo{
+                .sid = config.sid,
+                .flags = .{ .eor = true, .unordered = !config.ordered },
+                .ppid = std.mem.nativeToBig(u32, config.ppid),
+                .context = 0,
+                .assoc_id = 0,
+            },
+            .pr_info = pr_info,
+        };
+
+        const ret = usrsctp_sendv(
+            self,
+            data.ptr,
+            data.len,
+            null,
+            0,
+            &sendv_spa,
+            @sizeOf(SendvSpa),
+            SENDV_SPA,
+            0,
+        );
+
+        if (ret < 0) return error.SendFailed;
     }
 
     fn setNonBlocking(self: *Socket, nonblocking: bool) !void {
@@ -92,7 +159,11 @@ pub const Socket = opaque {
     }
 };
 
-pub const AF_CONN: u16 = 123;
+pub const SENDV_NOINFO = @as(c_int, 0);
+pub const SENDV_SNDINFO = @as(c_int, 1);
+pub const SENDV_PRINFO = @as(c_int, 2);
+pub const SENDV_AUTHINFO = @as(c_int, 3);
+pub const SENDV_SPA = @as(c_int, 4);
 
 pub const Flags = packed struct(u32) {
     _pad1: u13,
@@ -196,16 +267,26 @@ pub const RcvInfo = extern struct {
     assoc_id: u32 = 0,
 };
 
-pub const SndInfo = extern struct {
-    sid: u16 = 0,
-    flags: u16 = 0,
-    ppid: u32 = 0,
-    context: u32 = 0,
-    assoc_id: u32 = 0,
+pub const SendInfo = extern struct {
+    pub const Flags = packed struct(u16) {
+        _pad: u10 = 0,
+        unordered: bool = false,
+        _pad2: u2 = 0,
+        eor: bool = false,
+        _pad3: u2 = 0,
+    };
+
+    sid: u16,
+    flags: SendInfo.Flags,
+    ppid: u32,
+    context: u32,
+    assoc_id: u32,
 };
 
 pub const PrInfo = extern struct {
-    policy: u16 = 0,
+    pub const Policy = enum(u16) { none = 0, ttl = 1, buf = 2, rtx = 3 };
+
+    policy: Policy = .none,
     value: u32 = 0,
 };
 
@@ -214,10 +295,17 @@ pub const AuthInfo = extern struct {
 };
 
 pub const SendvSpa = extern struct {
-    flags: u32 = 0,
-    sndinfo: SndInfo = .{},
-    prinfo: PrInfo = .{},
-    authinfo: AuthInfo = .{},
+    pub const Flags = packed struct(u32) {
+        send_info: bool = false,
+        pr_info: bool = false,
+        auth_info: bool = false,
+        _pad: u29 = 0,
+    };
+
+    flags: SendvSpa.Flags = .{},
+    send_info: SendInfo,
+    pr_info: PrInfo = .{},
+    auth_info: AuthInfo = .{},
 };
 
 pub const InitMsg = extern struct {
@@ -244,7 +332,7 @@ pub fn deregisterAddress(addr: ?*anyopaque) void {
 }
 
 pub fn connInput(addr: ?*anyopaque, data: []const u8) void {
-    c.usrsctp_conninput(addr, data.ptr, data.len, 0);
+    usrsctp_conninput(addr, data.ptr, data.len, 0);
 }
 
 extern fn usrsctp_init(port: u16, send: ?*const fn (addr: ?*anyopaque, buffer: ?*anyopaque, length: usize, tos: u8, set_df: u8) callconv(.c) c_int, ?*const fn (format: [*c]const u8, ...) callconv(.c) void) void;
@@ -258,3 +346,4 @@ extern fn usrsctp_close(sock: *Socket) c_int;
 extern fn usrsctp_register_address(addr: ?*anyopaque) void;
 extern fn usrsctp_deregister_address(addr: ?*anyopaque) void;
 extern fn usrsctp_conninput(addr: ?*anyopaque, data: [*]const u8, datalen: usize, flags: u8) void;
+extern fn usrsctp_sendv(sock: *Socket, data: ?*const anyopaque, len: usize, to: ?*SockaddrConn, tolen: u32, info: ?*anyopaque, infolen: u32, infotype: u32, flags: i32) isize;
