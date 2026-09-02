@@ -11,6 +11,13 @@ pub const IPPROTO_SCTP: u32 = 132;
 pub const SCTP_INITMSG: u32 = 0x0003;
 pub const SCTP_NODELAY: u32 = 0x0004;
 pub const SCTP_EVENT: u32 = 0x001E;
+pub const SCTP_RESET_STREAMS: u32 = 0x00000901;
+
+pub const StreamResetRequestFlags = packed struct(u16) {
+    incoming: bool = false,
+    outgoing: bool = false,
+    _pad: u14 = 0,
+};
 
 pub const Error = struct {
     pub const INPROGRESS: i32 = 115;
@@ -93,6 +100,29 @@ pub const Socket = opaque {
         }
     }
 
+    pub fn resetStreams(self: *Socket, stream_ids: []const u16, flags: StreamResetRequestFlags) !void {
+        const ResetStreamsHeader = extern struct {
+            assoc_id: u32 = 2,
+            flags: StreamResetRequestFlags,
+            number_streams: u16,
+        };
+
+        if (stream_ids.len > 32) return error.TooManyStreams;
+
+        const header = ResetStreamsHeader{
+            .assoc_id = 2, // SCTP_ALL_ASSOC,
+            .flags = flags,
+            .number_streams = @intCast(stream_ids.len),
+        };
+
+        var buffer: [@sizeOf(ResetStreamsHeader) + 32 * @sizeOf(u16)]u8 = undefined;
+        var w = std.Io.Writer.fixed(&buffer);
+        try w.writeStruct(header, .native);
+        try w.writeSliceEndian(u16, stream_ids, .native);
+
+        try self.setOption(SCTP_RESET_STREAMS, w.buffered().ptr, @intCast(w.buffered().len));
+    }
+
     pub fn subscribe(self: *Socket, events: []const EventType) !void {
         for (events) |event| {
             var ev = Event{
@@ -159,11 +189,11 @@ pub const Socket = opaque {
     }
 };
 
-pub const SENDV_NOINFO = @as(c_int, 0);
-pub const SENDV_SNDINFO = @as(c_int, 1);
-pub const SENDV_PRINFO = @as(c_int, 2);
-pub const SENDV_AUTHINFO = @as(c_int, 3);
-pub const SENDV_SPA = @as(c_int, 4);
+pub const SENDV_NOINFO: u32 = 0;
+pub const SENDV_SNDINFO: u32 = 1;
+pub const SENDV_PRINFO: u32 = 2;
+pub const SENDV_AUTHINFO: u32 = 3;
+pub const SENDV_SPA: u32 = 4;
 
 pub const Flags = packed struct(u32) {
     _pad1: u13,
@@ -251,9 +281,25 @@ pub const Notification = extern union {
         assoc_id: u32,
     };
 
+    pub const StreamResetEvent = extern struct {
+        pub const Flags = packed struct(u16) {
+            incoming_ssn: bool = false,
+            outgoing_ssn: bool = false,
+            denied: bool = false,
+            failed: bool = false,
+            _pad: u12 = 0,
+        };
+
+        type: EventType,
+        flags: StreamResetEvent.Flags,
+        length: u32,
+        assoc_id: u32,
+    };
+
     header: Header,
     assoc_change: AssocChange,
     shutdown_event: ShutdownEvent,
+    stream_reset: StreamResetEvent,
 };
 
 pub const RcvInfo = extern struct {
